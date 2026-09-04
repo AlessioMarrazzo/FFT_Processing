@@ -18,9 +18,9 @@ BUCKET_WRITE = "fft_data"
 # PARAMETRI DI ELABORAZIONE
 # ==========================================
 FS = 10.0               # Frequenza di campionamento (10 Hz)
-SAMPLES_PER_BURST = 30  # Il numero esatto di campioni in un pacchetto LoRa
-BURSTS_TO_AVERAGE = 5   # Quanti pacchetti usare per fare la media Welch
-TOTAL_POINTS = SAMPLES_PER_BURST * BURSTS_TO_AVERAGE # 150 punti totali
+SAMPLES_PER_BURST = 40  # Il numero esatto di campioni in un pacchetto LoRa
+BURSTS_TO_AVERAGE = 4   # Quanti pacchetti usare per fare la media Welch
+TOTAL_POINTS = SAMPLES_PER_BURST * BURSTS_TO_AVERAGE # 160 punti totali
 UPDATE_INTERVAL = 5     # Attesa in secondi tra un calcolo e l'altro
 
 def calculate_save_fft():
@@ -28,17 +28,17 @@ def calculate_save_fft():
     query_api = client.query_api()
     write_api = client.write_api(write_options=SYNCHRONOUS)
 
-    # 1. Query super-semplice: prendi tutto senza incrociare i dati
+    # 1. Query temporale che scarta i dati vecchi di oltre 3 minuti
     query = f'''
         from(bucket: "{BUCKET_READ}")
-        |> range(start: -10m) 
+        |> range(start: -3m) 
         |> filter(fn: (r) => r._measurement == "raw_acceleration")
         |> tail(n: {TOTAL_POINTS})
     '''
     
     tables = query_api.query(query)
     
-    # 2. Smistamento manuale (infallibile)
+    # 2. Smistamento manuale
     x_data, y_data, z_data = [], [], []
     for table in tables:
         for record in table.records:
@@ -62,17 +62,17 @@ def calculate_save_fft():
 
     print(f"[{time.strftime('%H:%M:%S')}] Calcolo Welch FFT su {BURSTS_TO_AVERAGE} pacchetti (Tot: {N} campioni)...")
 
-    # Tagliamo gli array alla stessa lunghezza (N) e togliamo la media
+    # Tagliamo gli array alla stessa lunghezza (N) e togliamo la media (rimuove la componente DC)
     x_signal = np.array(x_data[:N]) - np.mean(x_data[:N])
     y_signal = np.array(y_data[:N]) - np.mean(y_data[:N])
     z_signal = np.array(z_data[:N]) - np.mean(z_data[:N])
 
-    # 4. VERO Calcolo FFT di Welch (Sincronizzato sui pacchetti hardware)
-    # nperseg = 30 (misura esatta del burst)
-    # noverlap = 0 (impedisce che Welch mescoli la fine di un pacchetto con l'inizio del successivo)
-    freqs, pxx_x = signal.welch(x_signal, fs=FS, nperseg=SAMPLES_PER_BURST, noverlap=0, scaling='spectrum')
-    freqs, pxx_y = signal.welch(y_signal, fs=FS, nperseg=SAMPLES_PER_BURST, noverlap=0, scaling='spectrum')
-    freqs, pxx_z = signal.welch(z_signal, fs=FS, nperseg=SAMPLES_PER_BURST, noverlap=0, scaling='spectrum')
+    # 4. VERO Calcolo FFT di Welch con ZERO-PADDING (nfft=256)
+    # L'aggiunta di nfft=256 fa l'interpolazione nel dominio della frequenza, 
+    # rendendo le curve estremamente lisce e migliorando la risoluzione di lettura del picco.
+    freqs, pxx_x = signal.welch(x_signal, fs=FS, nperseg=SAMPLES_PER_BURST, noverlap=0, nfft=256, scaling='spectrum')
+    freqs, pxx_y = signal.welch(y_signal, fs=FS, nperseg=SAMPLES_PER_BURST, noverlap=0, nfft=256, scaling='spectrum')
+    freqs, pxx_z = signal.welch(z_signal, fs=FS, nperseg=SAMPLES_PER_BURST, noverlap=0, nfft=256, scaling='spectrum')
 
     mag_x = np.sqrt(pxx_x)
     mag_y = np.sqrt(pxx_y)
